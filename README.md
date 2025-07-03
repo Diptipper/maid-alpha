@@ -12,6 +12,12 @@ The AI has 3 states
 
 The specific words for each command can be found in static/commands.json
 
+## Todo
+- Add an improve version of voice recognition
+- Custom voices
+- Custom personality
+- Run locally via Ollama
+
 ## Installation
 1. First you need an OpenAI account with an API key.
 2. Then download the whole folder and place it anywhere.
