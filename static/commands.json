@@ -1,6 +1,6 @@
 {
-  "start_single": [],
-  "start_session": ["listen","let's talk"],
+  "start_single": ["listen"],
+  "start_session": ["let's talk"],
   "stop_and_send": ["thanks"],
   "clear": ["reset"],
   "cancel": ["cancel"]
