@@ -186,7 +186,7 @@
             statusIndicator.className = "status " + state;
             statusIndicator.innerText =
                 state === "listening" ? "🎙️ Listening" :
-                //state === "error" ? "⚠️ Error" :
+                state === "error" ? "⚠️ Error" :
                 "Idle";
         }
 
