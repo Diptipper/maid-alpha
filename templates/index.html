@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mini ChatGPT</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script id="MathJax-script" async
+        src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+    </script>
+</head>
+<body>
+    <div class="chat-wrapper">
+        <h1>Mini ChatGPT</h1>
+        <div id="status-indicator" class="status idle">Idle</div>
+        <div id="chat-box" class="chat-box"></div>
+        <div class="input-area">
+            <button onclick="startVoice()" title="Speak"><span>🎤</span></button>
+            <textarea id="prompt" placeholder="Type or speak..."></textarea>
+            <button onclick="sendPrompt()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let commands = {
+            start_single: ["listen"],
+            start_session: ["let's talk"],
+            stop_and_send: ["thanks"],
+            clear: ["reset"],
+            cancel: ["cancel"]
+        };
+
+        async function loadCommands() {
+            try {
+                const res = await fetch("/static/commands.json");
+                const data = await res.json();
+                commands = data;
+                console.log("Loaded commands:", commands);
+            } catch (err) {
+                console.error("Failed to load commands.json:", err);
+            }
+        }
+
+        const recognition = window.SpeechRecognition || window.webkitSpeechRecognition
+            ? new (window.SpeechRecognition || window.webkitSpeechRecognition)()
+            : null;
+
+        let capturing = false;
+        let sessionMode = false;
+        let pendingResponse = false;
+        let transcriptBuffer = "";
+        let conversationHistory = [];
+        const statusIndicator = document.getElementById("status-indicator");
+        const promptInput = document.getElementById("prompt");
+
+        promptInput.addEventListener("input", () => {
+            if (capturing) {
+                transcriptBuffer = promptInput.value + " ";
+            }
+        });
+
+        function matchCommand(commandGroup, transcript) {
+            return commands[commandGroup]?.includes(transcript);
+        }
+
+        if (recognition) {
+            recognition.lang = 'en-US';
+            recognition.continuous = true;
+            recognition.interimResults = false;
+
+            recognition.onresult = function (event) {
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const result = event.results[i];
+                    if (!result.isFinal) continue;
+
+                    const transcript = result[0].transcript.trim().toLowerCase();
+                    console.log("Heard:", transcript);
+
+                    if (matchCommand("start_single", transcript) && !capturing && !pendingResponse) {
+                        capturing = true;
+                        sessionMode = false;
+                        conversationHistory = [];
+                        transcriptBuffer = "";
+                        promptInput.value = "";
+                        updateStatus("listening");
+                        console.log("👂 Started one-shot session");
+                        continue;
+                    }
+
+                    if (matchCommand("start_session", transcript) && !capturing && !pendingResponse) {
+                        capturing = true;
+                        sessionMode = true;
+                        conversationHistory = [];
+                        transcriptBuffer = "";
+                        promptInput.value = "";
+                        updateStatus("listening");
+                        console.log("👂 Started session mode");
+                        continue;
+                    }
+
+                    if (matchCommand("clear", transcript)) {
+                        transcriptBuffer = "";
+                        promptInput.value = "";
+                        console.log("🔄 Buffer reset");
+                        continue;
+                    }
+
+                    if (matchCommand("cancel", transcript)) {
+                        capturing = false;
+                        sessionMode = false;
+                        conversationHistory = [];
+                        transcriptBuffer = "";
+                        promptInput.value = "";
+                        updateStatus("idle");
+                        console.log("🚫 Cancelled");
+                        continue;
+                    }
+
+                    if (matchCommand("stop_and_send", transcript)) {
+                        if (!capturing) continue;
+
+                        const finalInput = transcriptBuffer.trim();
+                        promptInput.value = finalInput;
+
+                        if (finalInput === "") {
+                            capturing = false;
+                            if (sessionMode) {
+                                conversationHistory = [];
+                            }
+                            sessionMode = false;
+                            updateStatus("idle");
+                            console.log("👋 Empty thanks — session ended");
+                            continue;
+                        }
+
+                        capturing = false;
+                        pendingResponse = true;
+                        updateStatus("idle");
+                        transcriptBuffer = "";
+                        sendPrompt().then(() => {
+                            if (sessionMode) {
+                                capturing = true;
+                                updateStatus("listening");
+                            }
+                            pendingResponse = false;
+                        });
+                        continue;
+                    }
+
+                    if (capturing) {
+                        transcriptBuffer += transcript + " ";
+                        promptInput.value = transcriptBuffer.trim();
+                    }
+                }
+            };
+
+            recognition.onerror = function (event) {
+                console.error("Speech recognition error:", event.error);
+                updateStatus("error");
+            };
+
+            window.onload = async () => {
+                await loadCommands();
+                try {
+                    recognition.start();
+                    updateStatus("idle");
+                } catch (e) {
+                    console.error("Could not start recognition:", e);
+                }
+            };
+
+            recognition.onend = () => {
+                if (!pendingResponse) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.error("Failed to restart recognition:", e);
+                    }
+                }
+            };
+        }
+
+        function updateStatus(state) {
+            if (!statusIndicator) return;
+            statusIndicator.className = "status " + state;
+            statusIndicator.innerText =
+                state === "listening" ? "🎙️ Listening" :
+                //state === "error" ? "⚠️ Error" :
+                "Idle";
+        }
+
+        async function sendPrompt() {
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+
+            if (sessionMode) {
+                conversationHistory.push({ role: "user", content: prompt });
+            }
+
+            const chatBox = document.getElementById("chat-box");
+            chatBox.innerHTML += `<div class="message user"><div class="bubble">${prompt}</div></div>`;
+            promptInput.value = "";
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            const bodyData = sessionMode
+                ? { messages: conversationHistory }
+                : { messages: [{ role: "user", content: prompt }] };
+
+            const res = await fetch("/ask", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(bodyData)
+            });
+
+            const data = await res.json();
+            const responseText = data.response;
+
+            if (sessionMode) {
+                conversationHistory.push({ role: "assistant", content: responseText });
+            }
+            const formatted = formatMarkdown(responseText);
+            chatBox.innerHTML += `<div class="message bot"><div class="bubble">${formatted}</div></div>`;
+            MathJax.typesetPromise();
+            document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // 🔎 Print full conversation history to console
+            if (sessionMode) {
+                console.log("🔁 Conversation history so far:");
+                conversationHistory.forEach((msg, i) =>
+                    console.log(`${i + 1}. [${msg.role.toUpperCase()}] ${msg.content}`)
+                );
+            }
+        }
+
+        function formatMarkdown(text) {
+            return text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+                const escaped = code.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                return `<pre><code class="language-${lang}">${escaped}</code></pre>`;
+            });
+        }
+
+        function startVoice() {
+            if (recognition) {
+                recognition.start();
+            } else {
+                alert("Speech recognition not supported.");
+            }
+        }
+    </script>
+</body>
+</html>
