@@ -16,7 +16,9 @@
         <div id="status-indicator" class="status idle">Idle</div>
         <div id="chat-box" class="chat-box"></div>
         <div class="input-area">
-            <button onclick="startVoice()" title="Speak"><span>🎤</span></button>
+            <button id="toggle-session-btn" onclick="toggleSession()">💬 Start Session</button>
+
+
             <textarea id="prompt" placeholder="Type or speak..."></textarea>
             <button onclick="sendPrompt()">Send</button>
         </div>
@@ -114,6 +116,7 @@
                         promptInput.value = "";
                         updateStatus("idle");
                         console.log("🚫 Cancelled");
+                        document.getElementById("toggle-session-btn").textContent = "💬 Start Session";
                         continue;
                     }
 
@@ -131,6 +134,7 @@
                             sessionMode = false;
                             updateStatus("idle");
                             console.log("👋 Empty thanks — session ended");
+                            document.getElementById("toggle-session-btn").textContent = "💬 Start Session";
                             continue;
                         }
 
@@ -248,6 +252,35 @@
                 alert("Speech recognition not supported.");
             }
         }
+
+        function toggleSession() {
+            const btn = document.getElementById("toggle-session-btn");
+
+            if (!capturing && !pendingResponse) {
+                // Start session mode
+                capturing = true;
+                sessionMode = true;
+                conversationHistory = [];
+                transcriptBuffer = "";
+                promptInput.value = "";
+                updateStatus("listening");
+                btn.textContent = "🛑 Stop Session";
+                console.log("🔘 Toggled ON session mode");
+            } else {
+                // Stop session
+                capturing = false;
+                sessionMode = false;
+                conversationHistory = [];
+                transcriptBuffer = "";
+                promptInput.value = "";
+                updateStatus("idle");
+                btn.textContent = "💬 Start Session";
+                console.log("🛑 Toggled OFF session mode");
+            }
+        }
+
+
+
     </script>
 </body>
 </html>
