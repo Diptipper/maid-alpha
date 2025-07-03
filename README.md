@@ -10,6 +10,8 @@ The AI has 3 states
 - One-shot: Waiting for prompts or [stop_and_send] or [clear] or [cancel]
 - Session: Similar to One-shot but the conversation continues until the user send a blank prompt or [cancel]
 
+The specific words for each command can be found in static/commands.json
+
 ## Installation
 1. First you need an OpenAI account with an API key.
 2. Then download the whole folder and place it anywhere.
