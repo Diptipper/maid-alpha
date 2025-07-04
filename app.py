@@ -1,8 +1,12 @@
 from flask import Flask, render_template, request, jsonify
 from openai import OpenAI
+import os
+
+app_dir = os.path.dirname(os.path.abspath(__file__))
+key_dir = os.path.join(app_dir,"project.key")
 
 app = Flask(__name__)
-client = OpenAI(api_key=open("project.key").read().strip())
+client = OpenAI(api_key=open(key_dir).read().strip())
 model = "gpt-4o-mini"
 
 @app.route("/")
