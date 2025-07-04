@@ -62,6 +62,8 @@ def ask():
 
     try:
         resp = client.chat.completions.create(model=model, messages=messages)
+        print()
+        print("============ Answer ========================================")
         print(resp.choices[0].message.content)
         return jsonify({"response": resp.choices[0].message.content})
     except Exception as e:

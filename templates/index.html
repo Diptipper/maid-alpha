@@ -239,10 +239,48 @@
         }
 
         function formatMarkdown(text) {
-            return text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+            // format codes
+            ret = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
                 const escaped = code.replace(/</g, "&lt;").replace(/>/g, "&gt;");
                 return `<pre><code class="language-${lang}">${escaped}</code></pre>`;
             });
+
+            function countOccurrences(haystack, needle) {
+              return haystack.split(needle).length - 1;
+            }
+
+            // format boldfaces
+            b_replace = "<b>"
+            while(countOccurrences(ret,"**")>0){
+                ret = ret.replace("**",b_replace)
+                if(b_replace=="<b>"){
+                    b_replace="</b>"
+                }else{
+                    b_replace="<b>"
+                }
+            }
+
+            // format headers
+            ret = ret
+              .split('\n')
+              .map(line =>
+                line.startsWith('###')
+                  ? `<div class="mdheader1">${line.replace(/^###\s*/, '')}</div><hr>`
+                  : line
+              )
+              .join('\n');
+            ret = ret
+              .split('\n')
+              .map(line =>
+                line.startsWith('##')
+                  ? `<div class="mdheader2">${line.replace(/^##\s*/, '')}</div><hr>`
+                  : line
+              )
+              .join('\n');
+
+            // boldedHtml now has those lines wrapped in <strong>...</strong>
+
+            return ret
         }
 
         function startVoice() {
