@@ -1,182 +1,246 @@
-#!/usr/bin/env python3
-"""
-Run with…
-
-    python app.py           # web UI (default)
-    python app.py --console # interactive console that understands [listen] etc.
-"""
-from __future__ import annotations
-import argparse, json, os, sys
-from typing import List, Dict
-
-from flask import Flask, render_template, request, jsonify
+from os import system as cmd
+from ollama import chat, generate
+from TTS.api import TTS
+from pathlib import Path
 from openai import OpenAI
+import contextlib
+import threading
+import keyboard
+import time
+import sounddevice as sd
+import soundfile as sf
+import tempfile
+import os
+import re
+from datetime import datetime
 
-# ── Paths ──────────────────────────────────────────────────────────────────────
-APP_DIR      = os.path.dirname(os.path.abspath(__file__))
-KEY_PATH     = os.path.join(APP_DIR, "project.key")
-COMMANDS_JSON = os.path.join(APP_DIR, "static", "commands.json")  # ← NEW
+cmd("cls")
 
-# ── OpenAI & Flask ─────────────────────────────────────────────────────────────
-client = OpenAI(api_key=open(KEY_PATH).read().strip())
-model  = "gpt-4o-mini"
-app    = Flask(__name__)
+allowed_gpt = False
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def load_console_commands() -> Dict[str, List[str]]:
-    """Load command phrases from static/commands.json, with sensible fallbacks."""
-    defaults = {
-        "start_single": ["listen"],
-        "start_session": ["let's talk"],
-        "stop_and_send": ["thanks"],
-        "clear": ["reset"],
-        "cancel": ["cancel"]
-    }
-    try:
-        with open(COMMANDS_JSON, encoding="utf-8") as f:
-            data: Dict[str, List[str]] = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("commands.json must contain a JSON object")
-            # Merge defaults → anything missing in the file still works
-            merged = {**defaults, **data}
-            return merged
-    except FileNotFoundError:
-        print(f"⚠️  {COMMANDS_JSON} not found; falling back to built-ins.")
-    except Exception as e:
-        print(f"⚠️  Failed to load commands.json ({e}); falling back to built-ins.")
-    return defaults
+# === AI configuration ===
+model_name = "my_maid"  # based on "dolphin-mixtral:8x7b"
+user_name = "Diptip"
+ai_name = "Alaska"
+persona_assignment = [
+	{
+		'role': 'assistant',
+		'content': f'My name is now {ai_name}.'
+					+ f'It is recently given by my master {user_name}.'
+					+ f' I am now speaking to {user_name}.'
+	}
+]
 
-# The console REPL will call this once, lazily:
-COMMANDS: Dict[str, List[str]] | None = None
+def main():
+	global exit_flag, reroll_flag
+	messages = []
+	
+	cmd("cls")
 
-# ── Web routes ─────────────────────────────────────────────────────────────────
-@app.route("/")
-def index():
-    return render_template("index.html")
+	while True:
+		if exit_flag :
+			user_input = "Goodbye."
+		elif reroll_flag :
+			user_input = messages[-1]["content"]
+			messages = messages[:-1] # remove this entry to avoid duplicate appending
+			reroll_flag = False
+		else :
+			user_input = input('>> ')
 
-@app.route("/ask", methods=["POST"])
-def ask():
-    messages = request.json.get("messages", [])
-    if not messages:
-        return jsonify({"error": "No messages provided"}), 400
+		if user_input == "":
+			print("\033[F", end="")
+			continue
 
-    try:
-        resp = client.chat.completions.create(model=model, messages=messages)
-        print()
-        print("============ Answer ========================================")
-        print(resp.choices[0].message.content)
-        return jsonify({"response": resp.choices[0].message.content})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+		if user_input.lower() in ['exit', 'bye']:
+			exit_flag = True
+			continue
 
-# ── Console mode ───────────────────────────────────────────────────────────────
-def run_console() -> None:
-    global COMMANDS
-    if COMMANDS is None:                      # load once
-        COMMANDS = load_console_commands()
-        COMMANDS.setdefault("quit", ["quit", "exit"])
+		if user_input.lower() in ['clear', 'reset']:
+			messages = []
+			cmd("cls")
+			with open(log_path,"a") as file:
+				file.write(f"[reset]\n\n")
+			continue
 
-    print("🔹 Console mode — press ↵ on an empty line to send, [quit] to exit.")
-    capturing, session_mode, transcript_buf = False, False, ""
-    history: List[Dict[str, str]] = []
+		if user_input.lower() in ['reroll']:
+			messages = messages[:-1]
+			reroll_flag = True
+			with open(log_path,"a") as file:
+				file.write(f"[reroll]\n\n")
+			continue
 
-    while True:
-        try:
-            line = input("» ").rstrip()      # ← keep trailing spaces out
-        except (EOFError, KeyboardInterrupt):
-            print("\n👋 Bye!")
-            break
+		# Reprint everything
+		messages.append({'role': 'user', 'content': user_input})
+		if not exit_flag :
+			cmd("cls")
+			for entry in messages :
+				if entry['role'] == 'user' :
+					print(">> "+entry['content']+"\n")
+				elif entry['role'] == 'assistant' :
+					print("🩵: "+entry['content']+"\n")
 
-        # ── ①  NEW: empty line auto-sends  ────────────────────────────────────
-        if capturing and line == "":
-            final_inp = transcript_buf.strip()
-            if final_inp == "":
-                # behaves like an “empty [thanks]”
-                capturing = session_mode = False
-                print("👋 Empty input — session ended.")
-            else:
-                _send_and_print(final_inp, history, session_mode)
-                transcript_buf = ""
-                capturing = session_mode          # stay in session if needed
-            continue
+		new_convo_entry = []
+		if not exit_flag :
+			if allowed_gpt and search_engine_check(user_input):
+				print("\n🩵: *Asking the head maid*")
+				openai_resp = client.chat.completions.create(
+					model=gpt_model,
+					messages=[{"role": "user", "content": user_input}]
+				)
+				gpt_answer = openai_resp.choices[0].message.content
+				new_convo_entry = [
+				{'role': 'assistant', 'content': f'(thinking to myself: I asked the head maid, Reina onee-sama, and she told me the following answer:\n{gpt_answer}\nI have to relay this to master next...)'},
+				{'role': 'user', 'content': 'Tell me what the head maid says.'},
+				]
 
-        # ── bracket commands ---------------------------------------------------
-        if line.startswith("[") and line.endswith("]"):
-            cmd = line[1:-1].strip().lower()
+				with open(log_path,"a") as file:
+					file.write(f"gpt: {gpt_answer}\n\n")
 
-            if cmd in COMMANDS["quit"]:
-                print("👋 Bye!")
-                break
+		response_content = ""
 
-            if cmd in COMMANDS["start_single"] and not capturing:
-                capturing, session_mode, transcript_buf = True, False, ""
-                print("🎙️  One-shot recording …")
-                continue
+		# Response streaming
+		for ichunk, chunk in enumerate(chat(
+			model=model_name,
+			messages=(persona_assignment + messages + new_convo_entry),
+			stream=True
+		)):
+			if ichunk == 0:
+				print("🩵: ", end='', flush=True)
+			if chunk.message:
+				response_chunk = chunk.message.content
+				print(response_chunk, end='', flush=True)
+				response_content += response_chunk
+		print()
+		print()
 
-            if cmd in COMMANDS["start_session"] and not capturing:
-                capturing, session_mode, transcript_buf, history = True, True, "", []
-                print("🎙️  Session recording …")
-                continue
+		if exit_flag :
+			print()
+			break
 
-            if cmd in COMMANDS["clear"]:
-                transcript_buf = ""
-                print("↺ Buffer cleared.")
-                continue
+		
+		messages.append({'role': 'assistant', 'content': response_content})
 
-            if cmd in COMMANDS["cancel"]:
-                capturing, session_mode, transcript_buf, history = False, False, "", []
-                print("🚫 Cancelled.")
-                continue
+		with open(log_path,"a") as file:
+			file.write(f"user: {user_input}\n\n")
+			file.write(f"assistant: {response_content}\n\n")
 
-            if cmd in COMMANDS["stop_and_send"] and capturing:
-                final_inp = transcript_buf.strip()
-                if final_inp == "":
-                    capturing = session_mode = False
-                    print("👋 Empty thanks — session ended.")
-                else:
-                    _send_and_print(final_inp, history, session_mode)
-                    transcript_buf = ""
-                    capturing = session_mode
-                continue
+		# Replace name pronunciation tweaks
+		response_content = response_content.replace("Onee", "onee")
+		response_content = response_content.replace("onee", "o-nay")
+		response_content = response_content.replace("diptip", "Diptip")
+		response_content = response_content.replace("Diptip", "Dip-tip")
+		response_content = response_content.replace("* ", ".* ")
+		response_content = response_content.replace("*", "")
+		while response_content.count("  ")>0:
+			response_content = response_content.replace("  ", " ")
+		while response_content.count("..")>0:
+			response_content = response_content.replace("..", ".")
 
-            print("⚠️  Unknown command:", cmd)
-            continue
-
-        # ── regular text -------------------------------------------------------
-        if capturing:
-            transcript_buf += line + " "
-        else:
-            _send_and_print(line, [], False)
+		speak_text_async(response_content)
 
 
-def _send_and_print(user_prompt: str, history: List[Dict[str, str]],
-                    session_mode: bool) -> None:
-    if session_mode:
-        history.append({"role": "user", "content": user_prompt})
-        payload = {"messages": history}
-    else:
-        payload = {"messages": [{"role": "user", "content": user_prompt}]}
+def speak_text_async(text):
+	monitor_thread = threading.Thread(target=speak_text, args=(text,))
+	monitor_thread.start()
+	monitor_thread.join()
 
-    try:
-        resp = client.chat.completions.create(
-            model=model, messages=payload["messages"]
-        ).choices[0].message.content
-    except Exception as e:
-        print("⚠️  Error:", e)
+def speak_text(text):
+    global stop_speech
+    stop_speech = False
+
+    if not text.strip():
         return
 
-    print("🤖", resp, "\n")
-    if session_mode:
-        history.append({"role": "assistant", "content": resp})
+    # Clean up text
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
+    text = text.replace("  ", " ").strip()
 
-# ── Main entry-point ───────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Maid Alpha runner")
-    parser.add_argument("--console", action="store_true",
-                        help="Run interactive console instead of Flask web UI")
-    args = parser.parse_args()
+    # Split text by newline instead of sentence endings
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    chunks = lines
 
-    if args.console:
-        run_console()
-    else:
-        app.run(debug=True)
+    # Synthesize and play each chunk
+    for chunk in chunks:
+        if stop_speech:
+            break
+
+        # Save audio to temp file
+        os.makedirs("audio_files", exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir="audio_files", delete=False, suffix=".wav") as fp:
+            tmp_path = fp.name
+
+        with open(os.devnull, 'w', encoding='utf-8') as devnull:
+            with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                tts.tts_to_file(text=chunk, file_path=tmp_path)
+
+        # Load and play
+        data, samplerate = sf.read(tmp_path)
+        def playback():
+            sd.play(data, samplerate)
+            sd.wait()
+        thread = threading.Thread(target=playback)
+        thread.start()
+
+        # Monitor enter key to interrupt
+        while thread.is_alive():
+            if keyboard.is_pressed('enter'):
+                stop_speech = True
+                sd.stop()
+                break
+            time.sleep(0.01)
+
+        # Clean up
+        os.remove(tmp_path)
+
+
+def search_engine_check(user_input):
+
+	for attempt in range(10) :
+		# If the user_input requires searching, call chatGPT
+		query = f"You are a helper AI who reads the prompt and will decide if we need to use the head maid (who is very smart) to answer or not. Note that the main AI who you are helping is REALLY stupid and cannot answer knowledgable things very well. So you need to pass it to the head maid if necessary, or master Diptip will be angry if the main AI gives incorrect information. This in cludes things like general knowledge and information about specific things like location or person. Don't trust the main AI. Trust the head maid. But if it's just a casual conversation without requesting for serious information, we do not use the head maid so we can save time. But of course, if the user said that we should ask the head maid, then the answer is yes. Here is the user input:\n{user_input}\n----------------------------\nNow answer if we need the head maid or not; a one-word yes or no. \nYour answer:"
+		response = generate(model=model_name, prompt=query)["response"]
+		#print("\n🚨: ", response)
+
+		with open(log_path,"a") as file:
+			file.write(f"    inner: {response}\n")
+
+		while response[0] == " ":
+			response = response[1:]
+		is_no  = response[:2].lower()=="no"
+		is_yes = response[:3].lower()=="yes"
+		if is_no or is_yes :
+			return is_yes
+
+	return False
+
+
+stop_speech = False
+exit_flag = False
+reroll_flag = False
+
+cmd("cls")
+# preparation
+print(f"{ai_name} is coming...")
+
+app_dir = Path(__file__).parent
+log_folder_path = app_dir / f"conversations"
+if not os.path.exists(log_folder_path):
+    os.makedirs(log_folder_path)
+
+# create the conversation file
+now    = datetime.now()
+ts     = now.strftime("%y%m%d.%H%M%S.")+f"{now.microsecond//1000:03d}"
+log_path = app_dir / f"conversations/convo.{ts}.log"
+
+# startup the llm models
+dummy_prompt = "What is 1+1?"
+generate(model=model_name, prompt=dummy_prompt)
+tts = TTS(model_name="tts_models/en/ljspeech/vits--neon", progress_bar=False)
+if allowed_gpt :
+	key_path = app_dir / "project.key"
+	client = OpenAI(api_key=key_path.read_text().strip())
+	gpt_model = "gpt-4o-mini"
+
+
+main()
+

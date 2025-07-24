@@ -1,2 +1,4 @@
-Flask
-openai
+ollama
+pyttsx3
+keyboard
+TTS

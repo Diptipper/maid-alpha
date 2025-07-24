@@ -1,0 +1,1 @@
+ollama create my_maid -f ./my_maid
